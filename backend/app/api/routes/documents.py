@@ -2,30 +2,29 @@
 photos = pages of one document, transcribed by Claude vision). Electronic files
 (.pdf/.txt/.md) are the secondary path."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.ingestion.images import is_image
-from app.ingestion.ingest import ingest_document
-from app.ingestion.pipeline import MAX_FILE_BYTES, UploadItem, to_markdown
-from app.ingestion.splitter import count_documents, detect_boundaries
-from app.ingestion.vision import illegible_warnings, transcribe_page
+from app.ingestion import jobs
+from app.ingestion.chunker import chunk_markdown
+from app.ingestion.entities import extract
+from app.ingestion.pipeline import UploadItem
 from app.llm.anthropic_client import get_llm
+from app.llm.embeddings import get_embedder
 from app.schemas import (
-    BatchIngestResult,
     DocumentDetail,
     DocumentInfo,
+    DocumentUpdate,
     EntityInfo,
     FileInfo,
-    IngestResult,
+    JobAccepted,
+    MarkdownUpdate,
     PaymentInfo,
 )
 from app.storage import files, graph
 from app.storage.db import get_db
 from app.storage.models import Chunk, Document, DocumentFile, Entity, Payment
-
-MAX_BATCH_PAGES = 60
 
 router = APIRouter()
 
@@ -42,13 +41,8 @@ def _info(d: Document) -> DocumentInfo:
     )
 
 
-@router.post("/documents", response_model=IngestResult)
-async def upload_document(
-    uploads: list[UploadFile] = File(alias="files"),
-    family_member: str | None = None,
-    db: Session = Depends(get_db),
-) -> IngestResult:
-    items = [
+async def _read_items(uploads: list[UploadFile]) -> list[UploadItem]:
+    return [
         UploadItem(
             filename=u.filename or "upload",
             content=await u.read(),
@@ -57,105 +51,45 @@ async def upload_document(
         for u in uploads
     ]
 
-    llm = get_llm()
+
+@router.post("/documents", response_model=JobAccepted, status_code=202)
+async def upload_document(
+    background: BackgroundTasks,
+    uploads: list[UploadFile] = File(alias="files"),
+    family_member: str | None = None,
+    db: Session = Depends(get_db),
+) -> JobAccepted:
+    """Enqueue ingestion of ONE document (photos of its pages, or one e-file).
+
+    Recognition takes up to minutes, so it runs in the background — poll
+    GET /api/jobs/{job_id} for progress and the result."""
+    items = await _read_items(uploads)
     try:
-        markdown, warnings = to_markdown(items, llm)
+        job_id = jobs.enqueue(db, "single", items, family_member)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    # Guardrail: one upload must be ONE document. If the transcription clearly
-    # contains several unrelated documents, save anyway but warn loudly.
-    if any(is_image(i.filename, i.content_type) for i in items):
-        found = count_documents(markdown, llm)
-        if found > 1:
-            warnings.insert(
-                0,
-                f"Похоже, в этой загрузке {found} разных документа(ов). "
-                "Один документ = одна загрузка; для пачки со сканера используйте "
-                "пакетный режим («Пачка со сканера»). Рекомендуем удалить эту запись "
-                "и загрузить документы по отдельности.",
-            )
-
-    return ingest_document(markdown, items, family_member, warnings, llm, db)
+    background.add_task(jobs.run_job, job_id)
+    return JobAccepted(job_id=job_id)
 
 
-@router.post("/documents/batch", response_model=BatchIngestResult)
+@router.post("/documents/batch", response_model=JobAccepted, status_code=202)
 async def upload_batch(
+    background: BackgroundTasks,
     uploads: list[UploadFile] = File(alias="files"),
     family_member: str | None = None,
     db: Session = Depends(get_db),
-) -> BatchIngestResult:
-    """Scanner-batch mode: a stack of DIFFERENT paper documents scanned page-by-page.
+) -> JobAccepted:
+    """Enqueue a scanner batch: a stack of DIFFERENT documents scanned page-by-page.
 
-    Each page is transcribed separately, an LLM detects document boundaries
-    (contiguous pages only), and every detected document is saved on its own.
-    """
-    items = [
-        UploadItem(
-            filename=u.filename or "upload",
-            content=await u.read(),
-            content_type=u.content_type,
-        )
-        for u in uploads
-    ]
-    if not items:
-        raise HTTPException(status_code=422, detail="Файлы не переданы")
-    if len(items) > MAX_BATCH_PAGES:
-        raise HTTPException(
-            status_code=422, detail=f"Не больше {MAX_BATCH_PAGES} страниц за одну пачку"
-        )
-    for item in items:
-        if not is_image(item.filename, item.content_type):
-            raise HTTPException(
-                status_code=422,
-                detail="Пакетный режим принимает только изображения (сканы страниц)",
-            )
-        if len(item.content) > MAX_FILE_BYTES:
-            raise HTTPException(status_code=422, detail=f"Файл «{item.filename}» больше 30 МБ")
-
-    llm = get_llm()
-    batch_warnings: list[str] = []
-
-    # 1. Per-page transcription — one bad page cannot degrade the whole stack.
-    # TODO: parallelize page transcription.
-    page_markdowns: list[str] = []
-    for item in items:
-        try:
-            page_markdowns.append(transcribe_page(item.content, llm))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=f"«{item.filename}»: {exc}") from exc
-
-    # 2. Boundary detection over page texts (contiguity enforced in the splitter).
-    groups = detect_boundaries(page_markdowns, llm)
-
-    # 3. Ingest each detected document independently; one failure doesn't kill the rest.
-    results: list[IngestResult] = []
-    for group in groups:
-        group_items = [items[i] for i in group]
-        pages_md = [page_markdowns[i] for i in group]
-        if len(pages_md) > 1:
-            markdown = "\n\n".join(
-                f"## Страница {n + 1}\n\n{text}" for n, text in enumerate(pages_md)
-            )
-        else:
-            markdown = pages_md[0]
-        try:
-            results.append(
-                ingest_document(
-                    markdown, group_items, family_member, illegible_warnings(markdown), llm, db
-                )
-            )
-        except Exception:  # noqa: BLE001 — report per-group, keep going
-            page_numbers = ", ".join(str(i + 1) for i in group)
-            batch_warnings.append(f"Страницы {page_numbers}: не удалось сохранить документ")
-
-    if len(results) > 1:
-        batch_warnings.append(
-            "Границы документов определены автоматически — проверьте результат "
-            "в библиотеке; ошибочно склеенные или разрезанные документы удалите "
-            "и загрузите заново по отдельности."
-        )
-    return BatchIngestResult(documents=results, warnings=batch_warnings)
+    Pages are transcribed one-by-one, boundaries detected, and every document
+    saved separately — poll GET /api/jobs/{job_id} for per-page progress."""
+    items = await _read_items(uploads)
+    try:
+        job_id = jobs.enqueue(db, "batch", items, family_member)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    background.add_task(jobs.run_job, job_id)
+    return JobAccepted(job_id=job_id)
 
 
 @router.get("/documents", response_model=list[DocumentInfo])
@@ -238,6 +172,74 @@ def download_file(document_id: int, file_id: int, db: Session = Depends(get_db))
     if record is None:
         raise HTTPException(status_code=404, detail="File not found")
     return _serve(document, record)
+
+
+@router.patch("/documents/{document_id}", response_model=DocumentInfo)
+def update_document(
+    document_id: int, update: DocumentUpdate, db: Session = Depends(get_db)
+) -> DocumentInfo:
+    """Fix metadata the categorizer got wrong: title, category, family member."""
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if update.title is not None:
+        document.title = update.title
+    if update.category is not None:
+        document.category = update.category
+    if update.family_member is not None:
+        document.family_member = update.family_member or None
+    db.flush()
+    graph.sync_document(document.id, document.title, document.category, [])
+    return _info(document)
+
+
+@router.put("/documents/{document_id}/markdown", response_model=DocumentDetail)
+def update_markdown(
+    document_id: int, update: MarkdownUpdate, db: Session = Depends(get_db)
+) -> DocumentDetail:
+    """Fix the recognized text: replaces the markdown and re-runs extraction,
+    chunking and embeddings so search and payments reflect the correction."""
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    llm = get_llm()
+    entities, payments = extract(update.markdown, llm)
+    chunks = chunk_markdown(update.markdown)
+    embeddings = get_embedder().embed_documents([c.text for c in chunks]) if chunks else []
+
+    for model in (Chunk, Entity, Payment):
+        db.query(model).filter(model.document_id == document_id).delete()
+    document.raw_markdown = update.markdown
+
+    for chunk, embedding in zip(chunks, embeddings, strict=True):
+        db.add(
+            Chunk(
+                document_id=document.id,
+                section=chunk.section,
+                page=chunk.page,
+                text=chunk.text,
+                embedding=embedding,
+            )
+        )
+    for e in entities:
+        db.add(Entity(document_id=document.id, kind=e.kind, value=e.value, normalized=e.normalized))
+    for p in payments:
+        db.add(
+            Payment(
+                document_id=document.id,
+                amount=p.amount,
+                currency=p.currency,
+                due_date=p.due_date,
+                description=p.description,
+            )
+        )
+    db.flush()
+    graph.sync_document(
+        document.id, document.title, document.category, [e.model_dump() for e in entities]
+    )
+    db.expire(document)
+    return get_document(document_id, db)
 
 
 @router.delete("/documents/{document_id}", status_code=204)

@@ -29,6 +29,16 @@ export interface BatchIngestResult {
   warnings: string[];
 }
 
+export interface JobOut {
+  id: string;
+  kind: 'single' | 'batch';
+  status: 'pending' | 'processing' | 'done' | 'error';
+  progress: { done: number; total: number };
+  result: IngestResult | BatchIngestResult | null;
+  error: string | null;
+  created_at: string;
+}
+
 export interface FileInfo {
   id: number;
   filename: string;

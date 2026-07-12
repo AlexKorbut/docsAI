@@ -58,18 +58,23 @@ def format_ingest(data: dict) -> str:
     return "\n".join(lines)
 
 
+JOB_POLL_SECONDS = 3
+JOB_TIMEOUT_SECONDS = 20 * 60
+
+
 async def ingest(update: Update, uploads: list[tuple[str, bytes, str]]) -> None:
-    """POST files to the backend and report the result."""
+    """Enqueue ingestion on the backend, poll the job, report the result."""
     if not update.message:
         return
     await update.message.reply_text(
         f"📷 Обрабатываю ({len(uploads)} стр.)… это может занять минуту."
     )
     form_files = [("files", (name, content, mime)) for name, content, mime in uploads]
-    async with httpx.AsyncClient(timeout=600) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         try:
             response = await client.post(f"{BACKEND_URL}/api/documents", files=form_files)
             response.raise_for_status()
+            job_id = response.json()["job_id"]
         except httpx.HTTPStatusError as exc:
             detail = None
             try:
@@ -82,7 +87,24 @@ async def ingest(update: Update, uploads: list[tuple[str, bytes, str]]) -> None:
             logger.exception("Ingest failed")
             await update.message.reply_text("❌ Сервер недоступен, попробуйте позже.")
             return
-    await update.message.reply_text(format_ingest(response.json()))
+
+        waited = 0
+        while waited < JOB_TIMEOUT_SECONDS:
+            await asyncio.sleep(JOB_POLL_SECONDS)
+            waited += JOB_POLL_SECONDS
+            try:
+                job = (await client.get(f"{BACKEND_URL}/api/jobs/{job_id}")).json()
+            except httpx.HTTPError:
+                continue
+            if job.get("status") == "done" and job.get("result"):
+                await update.message.reply_text(format_ingest(job["result"]))
+                return
+            if job.get("status") == "error":
+                await update.message.reply_text(
+                    f"❌ Не удалось обработать: {job.get('error') or 'ошибка распознавания'}"
+                )
+                return
+    await update.message.reply_text("❌ Обработка заняла слишком много времени.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

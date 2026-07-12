@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { deleteDocument, fileUrl, getDocument, listDocuments } from '../api/client';
+import {
+  deleteDocument,
+  fileUrl,
+  getDocument,
+  listDocuments,
+  updateDocument,
+  updateMarkdown,
+} from '../api/client';
 import type { DocumentDetail, DocumentInfo } from '../types';
 import { CATEGORY_LABELS } from '../types';
 import { Reminders } from './Reminders';
@@ -17,6 +24,8 @@ export function Library() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<DocumentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string | null>(null);
+  const [savingText, setSavingText] = useState(false);
 
   const refresh = useCallback(() => {
     listDocuments({ category: category || undefined, q: search || undefined })
@@ -30,9 +39,35 @@ export function Library() {
 
   async function open(id: number) {
     try {
+      setEditingText(null);
       setSelected(await getDocument(id));
     } catch {
       setError('Не удалось открыть документ');
+    }
+  }
+
+  async function changeMeta(update: { title?: string; category?: string }) {
+    if (!selected) return;
+    try {
+      const info = await updateDocument(selected.id, update);
+      setSelected({ ...selected, ...info });
+      refresh();
+    } catch {
+      setError('Не удалось сохранить изменения');
+    }
+  }
+
+  async function saveText() {
+    if (!selected || editingText === null) return;
+    setSavingText(true);
+    try {
+      setSelected(await updateMarkdown(selected.id, editingText));
+      setEditingText(null);
+      refresh();
+    } catch {
+      setError('Не удалось сохранить текст');
+    } finally {
+      setSavingText(false);
     }
   }
 
@@ -72,9 +107,27 @@ export function Library() {
           <button className="link-button" onClick={() => setSelected(null)}>
             ← к списку
           </button>
-          <h2>{selected.title}</h2>
+          <h2
+            className="editable-title"
+            title="Нажмите, чтобы переименовать"
+            onClick={() => {
+              const title = window.prompt('Название документа:', selected.title)?.trim();
+              if (title && title !== selected.title) void changeMeta({ title });
+            }}
+          >
+            {selected.title} ✏️
+          </h2>
           <p className="doc-meta">
-            {CATEGORY_LABELS[selected.category] ?? selected.category}
+            <select
+              value={selected.category}
+              onChange={(e) => void changeMeta({ category: e.target.value })}
+            >
+              {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
             {selected.family_member ? ` · ${selected.family_member}` : ''}
             {selected.source_filename ? ` · ${selected.source_filename}` : ''}
             {selected.size_bytes ? ` · ${formatSize(selected.size_bytes)}` : ''}
@@ -142,8 +195,45 @@ export function Library() {
             </>
           )}
 
-          <h3>Содержимое</h3>
-          <pre className="doc-markdown">{selected.markdown}</pre>
+          <h3>
+            Содержимое{' '}
+            {editingText === null && (
+              <button className="link-button" onClick={() => setEditingText(selected.markdown)}>
+                ✏️ исправить текст
+              </button>
+            )}
+          </h3>
+          {editingText === null ? (
+            <pre className="doc-markdown">{selected.markdown}</pre>
+          ) : (
+            <div className="markdown-editor">
+              <textarea
+                value={editingText}
+                onChange={(e) => setEditingText(e.target.value)}
+                rows={20}
+                disabled={savingText}
+              />
+              <div className="doc-actions">
+                <button
+                  className="primary"
+                  onClick={() => void saveText()}
+                  disabled={savingText || !editingText.trim()}
+                >
+                  {savingText ? 'Сохраняю и переиндексирую…' : 'Сохранить исправления'}
+                </button>
+                <button
+                  className="link-button"
+                  onClick={() => setEditingText(null)}
+                  disabled={savingText}
+                >
+                  отмена
+                </button>
+              </div>
+              <p className="hint">
+                После сохранения суммы, даты и поиск пересчитаются по исправленному тексту.
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <ul className="doc-list">

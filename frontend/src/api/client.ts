@@ -5,6 +5,7 @@ import type {
   DocumentInfo,
   FamilyMember,
   IngestResult,
+  JobOut,
   Reminder,
 } from '../types';
 
@@ -16,34 +17,93 @@ async function json<T>(response: Response): Promise<T> {
   return response.json();
 }
 
-export async function askQuestion(question: string): Promise<Answer> {
+export async function askQuestion(
+  question: string,
+  filters: { category?: string; familyMember?: string } = {},
+): Promise<Answer> {
   return json(
     await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        category: filters.category || null,
+        family_member: filters.familyMember || null,
+      }),
     }),
   );
+}
+
+async function enqueueUpload(
+  endpoint: string,
+  files: File[],
+  familyMember?: string,
+): Promise<string> {
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
+  const data = await json<{ job_id: string }>(
+    await fetch(`${endpoint}${params}`, { method: 'POST', body: form }),
+  );
+  return data.job_id;
+}
+
+export async function getJob(id: string): Promise<JobOut> {
+  return json(await fetch(`/api/jobs/${id}`));
+}
+
+async function waitForJob(jobId: string, onProgress?: (job: JobOut) => void): Promise<JobOut> {
+  for (;;) {
+    const job = await getJob(jobId);
+    onProgress?.(job);
+    if (job.status === 'done' || job.status === 'error') return job;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
 }
 
 export async function uploadDocument(
   files: File[],
   familyMember?: string,
+  onProgress?: (job: JobOut) => void,
 ): Promise<IngestResult> {
-  const form = new FormData();
-  for (const file of files) form.append('files', file);
-  const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
-  return json(await fetch(`/api/documents${params}`, { method: 'POST', body: form }));
+  const jobId = await enqueueUpload('/api/documents', files, familyMember);
+  const job = await waitForJob(jobId, onProgress);
+  if (job.status === 'error' || !job.result) throw new Error(job.error ?? 'Обработка не удалась');
+  return job.result as IngestResult;
 }
 
 export async function uploadBatch(
   files: File[],
   familyMember?: string,
+  onProgress?: (job: JobOut) => void,
 ): Promise<BatchIngestResult> {
-  const form = new FormData();
-  for (const file of files) form.append('files', file);
-  const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
-  return json(await fetch(`/api/documents/batch${params}`, { method: 'POST', body: form }));
+  const jobId = await enqueueUpload('/api/documents/batch', files, familyMember);
+  const job = await waitForJob(jobId, onProgress);
+  if (job.status === 'error' || !job.result) throw new Error(job.error ?? 'Обработка не удалась');
+  return job.result as BatchIngestResult;
+}
+
+export async function updateDocument(
+  id: number,
+  update: { title?: string; category?: string; family_member?: string },
+): Promise<DocumentInfo> {
+  return json(
+    await fetch(`/api/documents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    }),
+  );
+}
+
+export async function updateMarkdown(id: number, markdown: string): Promise<DocumentDetail> {
+  return json(
+    await fetch(`/api/documents/${id}/markdown`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown }),
+    }),
+  );
 }
 
 export async function listDocuments(filters: {

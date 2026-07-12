@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from app.ingestion.images import MAX_EDGE, is_image, preprocess
-from app.ingestion.pipeline import UploadItem, to_markdown
+from app.ingestion.pipeline import MAX_BATCH_PAGES, UploadItem, to_markdown, validate_batch
 from app.ingestion.vision import ILLEGIBLE_MARKER
 from tests.conftest import FakeLLM
 
@@ -92,3 +92,11 @@ def test_multiple_electronic_documents_rejected() -> None:
 def test_empty_batch_rejected() -> None:
     with pytest.raises(ValueError):
         to_markdown([], FakeLLM())
+
+
+def test_validate_batch_accepts_only_images() -> None:
+    validate_batch([UploadItem("p1.jpg", make_photo()), UploadItem("p2.png", make_photo())])
+    with pytest.raises(ValueError, match="только изображения"):
+        validate_batch([UploadItem("report.pdf", b"%PDF")])
+    with pytest.raises(ValueError, match="Не больше"):
+        validate_batch([UploadItem(f"p{i}.jpg", b"x") for i in range(MAX_BATCH_PAGES + 1)])

@@ -388,3 +388,52 @@ header p {
   border-radius: 10px;
   font-size: 0.9rem;
 }
+
+.chat-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.chat-filters select {
+  padding: 6px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: white;
+  font-size: 0.9rem;
+}
+
+.editable-title {
+  cursor: pointer;
+}
+
+.doc-meta select {
+  padding: 3px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: white;
+  font-size: 0.85rem;
+}
+
+.markdown-editor textarea {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  padding: 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.doc-actions .primary {
+  background: #1f6feb;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.doc-actions .primary:disabled {
+  opacity: 0.5;
+}

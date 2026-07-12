@@ -23,6 +23,36 @@ class BatchIngestResult(BaseModel):
     warnings: list[str] = []
 
 
+class JobAccepted(BaseModel):
+    job_id: str
+
+
+class JobProgress(BaseModel):
+    done: int = 0
+    total: int = 0
+
+
+class JobOut(BaseModel):
+    id: str
+    kind: str  # single | batch
+    status: str  # pending | processing | done | error
+    progress: JobProgress
+    # IngestResult (single) or BatchIngestResult (batch) once status == done
+    result: dict | None = None
+    error: str | None = None
+    created_at: datetime
+
+
+class DocumentUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    category: str | None = None
+    family_member: str | None = None
+
+
+class MarkdownUpdate(BaseModel):
+    markdown: str = Field(min_length=1)
+
+
 class DocumentInfo(BaseModel):
     id: int
     title: str

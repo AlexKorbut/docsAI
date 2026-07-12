@@ -50,7 +50,9 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
         : `Распознавание ${files.length} страниц… это может занять минуту`,
     );
     try {
-      const result = await uploadDocument(files, member || undefined);
+      const result = await uploadDocument(files, member || undefined, (job) => {
+        if (job.status === 'processing') setStatus('Распознаю документ…');
+      });
       setStatus(
         `«${result.title}» (${result.category}): ${result.pages} стр., ` +
           `${result.payments} платежей`,
@@ -89,7 +91,11 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
     setBatchResults([]);
     setStatus(`Распознаю пачку со сканера… (${files.length} файлов, это займёт время)`);
     try {
-      const result = await uploadBatch(files, member || undefined);
+      const result = await uploadBatch(files, member || undefined, (job) => {
+        if (job.status === 'processing') {
+          setStatus(`Распознано страниц: ${job.progress.done} из ${job.progress.total}…`);
+        }
+      });
       setStatus(`Из пачки сохранено документов: ${result.documents.length}`);
       setBatchResults(
         result.documents.map(

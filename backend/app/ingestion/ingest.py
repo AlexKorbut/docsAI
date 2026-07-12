@@ -5,23 +5,27 @@ from sqlalchemy.orm import Session
 from app.ingestion.categorizer import categorize
 from app.ingestion.chunker import chunk_markdown
 from app.ingestion.entities import extract
-from app.ingestion.pipeline import UploadItem
+from app.ingestion.pipeline import StoredUpload
 from app.llm.anthropic_client import LLMClient
 from app.llm.embeddings import get_embedder
 from app.schemas import IngestResult
-from app.storage import files, graph
+from app.storage import graph
 from app.storage.models import Chunk, Document, DocumentFile, Entity, Payment
 
 
 def ingest_document(
     markdown: str,
-    items: list[UploadItem],
+    stored: list[StoredUpload],
     family_member: str | None,
     warnings: list[str],
     llm: LLMClient,
     db: Session,
 ) -> IngestResult:
-    """Categorize, extract, embed and persist one document with its original files."""
+    """Categorize, extract, embed and persist one document.
+
+    Original files must already be on disk (`stored`) — jobs persist uploads
+    at enqueue time so the HTTP request can return immediately.
+    """
     category, title = categorize(markdown, llm)
     entities, payments = extract(markdown, llm)
 
@@ -29,22 +33,22 @@ def ingest_document(
         title=title,
         category=category,
         family_member=family_member,
-        source_filename=items[0].filename,
-        size_bytes=sum(len(i.content) for i in items),
+        source_filename=stored[0].filename,
+        size_bytes=sum(s.size_bytes for s in stored),
         raw_markdown=markdown,
     )
     db.add(document)
     db.flush()
 
-    for position, item in enumerate(items):
+    for position, item in enumerate(stored):
         db.add(
             DocumentFile(
                 document_id=document.id,
                 position=position,
                 filename=item.filename,
-                stored_path=files.save_upload(item.filename, item.content),
+                stored_path=item.stored_path,
                 mime_type=item.content_type,
-                size_bytes=len(item.content),
+                size_bytes=item.size_bytes,
             )
         )
 
@@ -83,6 +87,6 @@ def ingest_document(
         chunks=len(chunks),
         entities=len(entities),
         payments=len(payments),
-        pages=len(items),
+        pages=len(stored),
         warnings=warnings,
     )
