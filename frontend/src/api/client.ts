@@ -1,5 +1,6 @@
 import type {
   Answer,
+  BatchIngestResult,
   DocumentDetail,
   DocumentInfo,
   FamilyMember,
@@ -33,6 +34,16 @@ export async function uploadDocument(
   for (const file of files) form.append('files', file);
   const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
   return json(await fetch(`/api/documents${params}`, { method: 'POST', body: form }));
+}
+
+export async function uploadBatch(
+  files: File[],
+  familyMember?: string,
+): Promise<BatchIngestResult> {
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
+  return json(await fetch(`/api/documents/batch${params}`, { method: 'POST', body: form }));
 }
 
 export async function listDocuments(filters: {

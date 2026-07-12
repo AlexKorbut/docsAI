@@ -26,6 +26,27 @@ Rules:
 - Output ONLY the Markdown transcription, no commentary."""
 
 
+def transcribe_page(photo: bytes, llm: LLMClient) -> str:
+    """Transcribe a single scanned page (batch/scanner mode transcribes per page
+    so one bad page cannot degrade or truncate the whole stack)."""
+    return llm.complete_vision(
+        model=get_settings().vision_model,
+        system=SYSTEM,
+        prompt="Transcribe this single page to Markdown.",
+        images=[to_base64_jpeg(photo)],
+    )
+
+
+def illegible_warnings(markdown: str) -> list[str]:
+    illegible = markdown.count(ILLEGIBLE_MARKER)
+    if not illegible:
+        return []
+    return [
+        f"Не удалось распознать {illegible} фрагмент(ов) — проверьте документ "
+        "и при необходимости переснимите страницы при лучшем освещении."
+    ]
+
+
 def transcribe_photos(photos: list[bytes], llm: LLMClient) -> tuple[str, list[str]]:
     """Transcribe document photos to Markdown. Returns (markdown, warnings)."""
     images = [to_base64_jpeg(content) for content in photos]
@@ -36,11 +57,4 @@ def transcribe_photos(photos: list[bytes], llm: LLMClient) -> tuple[str, list[st
         prompt=prompt,
         images=images,
     )
-    warnings = []
-    illegible = markdown.count(ILLEGIBLE_MARKER)
-    if illegible:
-        warnings.append(
-            f"Не удалось распознать {illegible} фрагмент(ов) — проверьте документ "
-            "и при необходимости переснимите страницы при лучшем освещении."
-        )
-    return markdown, warnings
+    return markdown, illegible_warnings(markdown)

@@ -6,13 +6,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.ingestion.categorizer import categorize
-from app.ingestion.chunker import chunk_markdown
-from app.ingestion.entities import extract
-from app.ingestion.pipeline import UploadItem, to_markdown
+from app.ingestion.images import is_image
+from app.ingestion.ingest import ingest_document
+from app.ingestion.pipeline import MAX_FILE_BYTES, UploadItem, to_markdown
+from app.ingestion.splitter import count_documents, detect_boundaries
+from app.ingestion.vision import illegible_warnings, transcribe_page
 from app.llm.anthropic_client import get_llm
-from app.llm.embeddings import get_embedder
 from app.schemas import (
+    BatchIngestResult,
     DocumentDetail,
     DocumentInfo,
     EntityInfo,
@@ -23,6 +24,8 @@ from app.schemas import (
 from app.storage import files, graph
 from app.storage.db import get_db
 from app.storage.models import Chunk, Document, DocumentFile, Entity, Payment
+
+MAX_BATCH_PAGES = 60
 
 router = APIRouter()
 
@@ -60,70 +63,99 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    category, title = categorize(markdown, llm)
-    entities, payments = extract(markdown, llm)
-
-    document = Document(
-        title=title,
-        category=category,
-        family_member=family_member,
-        source_filename=items[0].filename,
-        size_bytes=sum(len(i.content) for i in items),
-        raw_markdown=markdown,
-    )
-    db.add(document)
-    db.flush()
-
-    for position, item in enumerate(items):
-        db.add(
-            DocumentFile(
-                document_id=document.id,
-                position=position,
-                filename=item.filename,
-                stored_path=files.save_upload(item.filename, item.content),
-                mime_type=item.content_type,
-                size_bytes=len(item.content),
+    # Guardrail: one upload must be ONE document. If the transcription clearly
+    # contains several unrelated documents, save anyway but warn loudly.
+    if any(is_image(i.filename, i.content_type) for i in items):
+        found = count_documents(markdown, llm)
+        if found > 1:
+            warnings.insert(
+                0,
+                f"Похоже, в этой загрузке {found} разных документа(ов). "
+                "Один документ = одна загрузка; для пачки со сканера используйте "
+                "пакетный режим («Пачка со сканера»). Рекомендуем удалить эту запись "
+                "и загрузить документы по отдельности.",
             )
-        )
 
-    chunks = chunk_markdown(markdown)
-    embeddings = get_embedder().embed_documents([c.text for c in chunks]) if chunks else []
-    for chunk, embedding in zip(chunks, embeddings, strict=True):
-        db.add(
-            Chunk(
-                document_id=document.id,
-                section=chunk.section,
-                page=chunk.page,
-                text=chunk.text,
-                embedding=embedding,
+    return ingest_document(markdown, items, family_member, warnings, llm, db)
+
+
+@router.post("/documents/batch", response_model=BatchIngestResult)
+async def upload_batch(
+    uploads: list[UploadFile] = File(alias="files"),
+    family_member: str | None = None,
+    db: Session = Depends(get_db),
+) -> BatchIngestResult:
+    """Scanner-batch mode: a stack of DIFFERENT paper documents scanned page-by-page.
+
+    Each page is transcribed separately, an LLM detects document boundaries
+    (contiguous pages only), and every detected document is saved on its own.
+    """
+    items = [
+        UploadItem(
+            filename=u.filename or "upload",
+            content=await u.read(),
+            content_type=u.content_type,
+        )
+        for u in uploads
+    ]
+    if not items:
+        raise HTTPException(status_code=422, detail="Файлы не переданы")
+    if len(items) > MAX_BATCH_PAGES:
+        raise HTTPException(
+            status_code=422, detail=f"Не больше {MAX_BATCH_PAGES} страниц за одну пачку"
+        )
+    for item in items:
+        if not is_image(item.filename, item.content_type):
+            raise HTTPException(
+                status_code=422,
+                detail="Пакетный режим принимает только изображения (сканы страниц)",
             )
-        )
-    for e in entities:
-        db.add(Entity(document_id=document.id, kind=e.kind, value=e.value, normalized=e.normalized))
-    for p in payments:
-        db.add(
-            Payment(
-                document_id=document.id,
-                amount=p.amount,
-                currency=p.currency,
-                due_date=p.due_date,
-                description=p.description,
+        if len(item.content) > MAX_FILE_BYTES:
+            raise HTTPException(status_code=422, detail=f"Файл «{item.filename}» больше 30 МБ")
+
+    llm = get_llm()
+    batch_warnings: list[str] = []
+
+    # 1. Per-page transcription — one bad page cannot degrade the whole stack.
+    # TODO: parallelize page transcription.
+    page_markdowns: list[str] = []
+    for item in items:
+        try:
+            page_markdowns.append(transcribe_page(item.content, llm))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"«{item.filename}»: {exc}") from exc
+
+    # 2. Boundary detection over page texts (contiguity enforced in the splitter).
+    groups = detect_boundaries(page_markdowns, llm)
+
+    # 3. Ingest each detected document independently; one failure doesn't kill the rest.
+    results: list[IngestResult] = []
+    for group in groups:
+        group_items = [items[i] for i in group]
+        pages_md = [page_markdowns[i] for i in group]
+        if len(pages_md) > 1:
+            markdown = "\n\n".join(
+                f"## Страница {n + 1}\n\n{text}" for n, text in enumerate(pages_md)
             )
+        else:
+            markdown = pages_md[0]
+        try:
+            results.append(
+                ingest_document(
+                    markdown, group_items, family_member, illegible_warnings(markdown), llm, db
+                )
+            )
+        except Exception:  # noqa: BLE001 — report per-group, keep going
+            page_numbers = ", ".join(str(i + 1) for i in group)
+            batch_warnings.append(f"Страницы {page_numbers}: не удалось сохранить документ")
+
+    if len(results) > 1:
+        batch_warnings.append(
+            "Границы документов определены автоматически — проверьте результат "
+            "в библиотеке; ошибочно склеенные или разрезанные документы удалите "
+            "и загрузите заново по отдельности."
         )
-    db.flush()
-
-    graph.sync_document(document.id, title, category, [e.model_dump() for e in entities])
-
-    return IngestResult(
-        document_id=document.id,
-        title=title,
-        category=category,
-        chunks=len(chunks),
-        entities=len(entities),
-        payments=len(payments),
-        pages=len(items),
-        warnings=warnings,
-    )
+    return BatchIngestResult(documents=results, warnings=batch_warnings)
 
 
 @router.get("/documents", response_model=list[DocumentInfo])

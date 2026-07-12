@@ -24,6 +24,11 @@ export interface IngestResult {
   warnings: string[];
 }
 
+export interface BatchIngestResult {
+  documents: IngestResult[];
+  warnings: string[];
+}
+
 export interface FileInfo {
   id: number;
   filename: string;

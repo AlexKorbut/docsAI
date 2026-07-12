@@ -16,6 +16,13 @@ class IngestResult(BaseModel):
     warnings: list[str] = []
 
 
+class BatchIngestResult(BaseModel):
+    """Scanner-batch upload: one upload produced several separate documents."""
+
+    documents: list[IngestResult]
+    warnings: list[str] = []
+
+
 class DocumentInfo(BaseModel):
     id: int
     title: str

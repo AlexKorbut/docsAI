@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { addFamilyMember, listFamily, uploadDocument } from '../api/client';
+import { addFamilyMember, listFamily, uploadBatch, uploadDocument } from '../api/client';
 import type { FamilyMember } from '../types';
 
 const NEW_MEMBER = '__new__';
@@ -7,7 +7,9 @@ const NEW_MEMBER = '__new__';
 export function Upload({ onUploaded }: { onUploaded?: () => void }) {
   const cameraRef = useRef<HTMLInputElement>(null);
   const filesRef = useRef<HTMLInputElement>(null);
+  const batchRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [batchResults, setBatchResults] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [family, setFamily] = useState<FamilyMember[]>([]);
@@ -41,6 +43,7 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
     if (files.length === 0) return;
     setBusy(true);
     setWarnings([]);
+    setBatchResults([]);
     setStatus(
       files.length === 1
         ? `Обработка «${files[0].name}»…`
@@ -76,6 +79,31 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
     const files = Array.from(filesRef.current?.files ?? []);
     if (files.length === 0) return;
     void send(files);
+  }
+
+  async function onBatchPicked() {
+    const files = Array.from(batchRef.current?.files ?? []);
+    if (files.length === 0) return;
+    setBusy(true);
+    setWarnings([]);
+    setBatchResults([]);
+    setStatus(`Распознаю пачку со сканера… (${files.length} файлов, это займёт время)`);
+    try {
+      const result = await uploadBatch(files, member || undefined);
+      setStatus(`Из пачки сохранено документов: ${result.documents.length}`);
+      setBatchResults(
+        result.documents.map(
+          (d) => `«${d.title}» — ${d.category}, ${d.pages} стр., платежей: ${d.payments}`,
+        ),
+      );
+      setWarnings([...result.warnings, ...result.documents.flatMap((d) => d.warnings)]);
+      onUploaded?.();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Ошибка пакетной загрузки');
+    } finally {
+      setBusy(false);
+      if (batchRef.current) batchRef.current.value = '';
+    }
   }
 
   return (
@@ -117,7 +145,27 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
             hidden
           />
         </label>
+
+        <label className="upload-button secondary">
+          📚 Пачка со сканера
+          <input
+            ref={batchRef}
+            type="file"
+            accept="image/*,.heic,.heif"
+            multiple
+            onChange={() => void onBatchPicked()}
+            disabled={busy}
+            hidden
+          />
+        </label>
       </div>
+
+      <p className="upload-hint">
+        Одна загрузка = <strong>один</strong> документ: несколько фото считаются страницами
+        одного документа. Разные документы загружайте по отдельности. Если отсканировали
+        пачку разных документов разом — используйте «Пачка со сканера»: система разделит
+        страницы по документам автоматически (границы стоит проверить).
+      </p>
 
       {pendingPhotos.length > 0 && (
         <div className="pending-photos">
@@ -135,6 +183,13 @@ export function Upload({ onUploaded }: { onUploaded?: () => void }) {
       )}
 
       {status && <p className="upload-status">{status}</p>}
+      {batchResults.length > 0 && (
+        <ul className="batch-results">
+          {batchResults.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
       {warnings.map((w, i) => (
         <p key={i} className="warning">
           ⚠️ {w}

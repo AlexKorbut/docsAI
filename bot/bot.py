@@ -43,13 +43,18 @@ def format_answer(data: dict) -> str:
 
 
 def format_ingest(data: dict) -> str:
+    pages = data.get("pages", 1)
     lines = [
         f"✅ Сохранено: «{data['title']}»",
-        f"Категория: {data['category']}, страниц: {data.get('pages', 1)}, "
-        f"платежей: {data['payments']}",
+        f"Категория: {data['category']}, страниц: {pages}, платежей: {data['payments']}",
     ]
     for warning in data.get("warnings", []):
         lines.append(f"⚠️ {warning}")
+    if pages > 1:
+        lines.append(
+            "ℹ️ Альбом = страницы ОДНОГО документа. Разные документы отправляйте "
+            "отдельными сообщениями или альбомами."
+        )
     return "\n".join(lines)
 
 
