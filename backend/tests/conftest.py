@@ -10,14 +10,33 @@ from app.agents.state import Services
 class FakeLLM:
     """Scripted LLM: returns queued JSON responses per agent, based on system prompt."""
 
-    def __init__(self, json_responses: dict[str, list[dict[str, Any]]]):
+    def __init__(
+        self,
+        json_responses: dict[str, list[dict[str, Any]]] | None = None,
+        vision_response: str = "ok",
+    ):
         # key: substring identifying the agent's system prompt -> list of responses
-        self._responses = json_responses
+        self._responses = json_responses or {}
+        self._vision_response = vision_response
         self.calls: list[dict[str, Any]] = []
 
     def complete(self, *, model: str, system: str, prompt: str, max_tokens: int = 16000) -> str:
         self.calls.append({"model": model, "system": system, "prompt": prompt})
         return "ok"
+
+    def complete_vision(
+        self,
+        *,
+        model: str,
+        system: str,
+        prompt: str,
+        images: list[tuple[str, str]],
+        max_tokens: int = 16000,
+    ) -> str:
+        self.calls.append(
+            {"model": model, "system": system, "prompt": prompt, "images": len(images)}
+        )
+        return self._vision_response
 
     def complete_json(
         self, *, model: str, system: str, prompt: str, schema: dict, max_tokens: int = 16000

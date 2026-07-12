@@ -22,7 +22,7 @@ async def seed() -> None:
             if path.suffix.lower() not in {".md", ".txt", ".pdf"}:
                 continue
             upload = UploadFile(filename=path.name, file=io.BytesIO(path.read_bytes()))
-            result = await upload_document(upload, family_member=None, db=session)
+            result = await upload_document([upload], family_member=None, db=session)
             print(f"Ingested {path.name}: {result.model_dump()}")
         session.commit()
     finally:

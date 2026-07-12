@@ -1,20 +1,28 @@
-"""Document library: ingest (parse -> categorize -> extract -> chunk -> embed -> store),
-browse, view, download original, delete."""
+"""Document library. Primary ingestion path: photos of paper documents (several
+photos = pages of one document, transcribed by Claude vision). Electronic files
+(.pdf/.txt/.md) are the secondary path."""
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.ingestion.categorizer import categorize
 from app.ingestion.chunker import chunk_markdown
 from app.ingestion.entities import extract
-from app.ingestion.parser import parse_to_markdown
+from app.ingestion.pipeline import UploadItem, to_markdown
 from app.llm.anthropic_client import get_llm
 from app.llm.embeddings import get_embedder
-from app.schemas import DocumentDetail, DocumentInfo, EntityInfo, IngestResult, PaymentInfo
+from app.schemas import (
+    DocumentDetail,
+    DocumentInfo,
+    EntityInfo,
+    FileInfo,
+    IngestResult,
+    PaymentInfo,
+)
 from app.storage import files, graph
 from app.storage.db import get_db
-from app.storage.models import Chunk, Document, Entity, Payment
+from app.storage.models import Chunk, Document, DocumentFile, Entity, Payment
 
 router = APIRouter()
 
@@ -33,17 +41,25 @@ def _info(d: Document) -> DocumentInfo:
 
 @router.post("/documents", response_model=IngestResult)
 async def upload_document(
-    file: UploadFile,
+    uploads: list[UploadFile] = File(alias="files"),
     family_member: str | None = None,
     db: Session = Depends(get_db),
 ) -> IngestResult:
-    content = await file.read()
+    items = [
+        UploadItem(
+            filename=u.filename or "upload",
+            content=await u.read(),
+            content_type=u.content_type,
+        )
+        for u in uploads
+    ]
+
+    llm = get_llm()
     try:
-        markdown = parse_to_markdown(file.filename or "upload", content)
+        markdown, warnings = to_markdown(items, llm)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    llm = get_llm()
     category, title = categorize(markdown, llm)
     entities, payments = extract(markdown, llm)
 
@@ -51,14 +67,24 @@ async def upload_document(
         title=title,
         category=category,
         family_member=family_member,
-        source_filename=file.filename,
-        stored_path=files.save_upload(file.filename or "upload", content),
-        mime_type=file.content_type,
-        size_bytes=len(content),
+        source_filename=items[0].filename,
+        size_bytes=sum(len(i.content) for i in items),
         raw_markdown=markdown,
     )
     db.add(document)
     db.flush()
+
+    for position, item in enumerate(items):
+        db.add(
+            DocumentFile(
+                document_id=document.id,
+                position=position,
+                filename=item.filename,
+                stored_path=files.save_upload(item.filename, item.content),
+                mime_type=item.content_type,
+                size_bytes=len(item.content),
+            )
+        )
 
     chunks = chunk_markdown(markdown)
     embeddings = get_embedder().embed_documents([c.text for c in chunks]) if chunks else []
@@ -95,6 +121,8 @@ async def upload_document(
         chunks=len(chunks),
         entities=len(entities),
         payments=len(payments),
+        pages=len(items),
+        warnings=warnings,
     )
 
 
@@ -137,22 +165,47 @@ def get_document(document_id: int, db: Session = Depends(get_db)) -> DocumentDet
             )
             for p in document.payments
         ],
+        files=[
+            FileInfo(
+                id=f.id,
+                filename=f.filename,
+                mime_type=f.mime_type,
+                size_bytes=f.size_bytes,
+                position=f.position,
+            )
+            for f in document.files
+        ],
     )
 
 
-@router.get("/documents/{document_id}/file")
-def download_document(document_id: int, db: Session = Depends(get_db)) -> FileResponse:
-    document = db.get(Document, document_id)
-    if document is None or not document.stored_path:
-        raise HTTPException(status_code=404, detail="Original file not found")
-    path = files.resolve(document.stored_path)
+def _serve(document: Document, record: DocumentFile) -> FileResponse:
+    path = files.resolve(record.stored_path)
     if path is None:
         raise HTTPException(status_code=404, detail="Original file is missing on disk")
     return FileResponse(
         path,
-        media_type=document.mime_type or "application/octet-stream",
-        filename=document.source_filename or path.name,
+        media_type=record.mime_type or "application/octet-stream",
+        filename=record.filename,
     )
+
+
+@router.get("/documents/{document_id}/file")
+def download_first_file(document_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    document = db.get(Document, document_id)
+    if document is None or not document.files:
+        raise HTTPException(status_code=404, detail="Original file not found")
+    return _serve(document, document.files[0])
+
+
+@router.get("/documents/{document_id}/files/{file_id}")
+def download_file(document_id: int, file_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    record = next((f for f in document.files if f.id == file_id), None)
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return _serve(document, record)
 
 
 @router.delete("/documents/{document_id}", status_code=204)
@@ -160,9 +213,11 @@ def delete_document(document_id: int, db: Session = Depends(get_db)) -> None:
     document = db.get(Document, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    for model in (Chunk, Entity, Payment):
+    for record in document.files:
+        files.delete(record.stored_path)
+    for model in (DocumentFile, Chunk, Entity, Payment):
         db.query(model).filter(model.document_id == document_id).delete()
-    if document.stored_path:
+    if document.stored_path:  # legacy single-file column
         files.delete(document.stored_path)
     db.delete(document)
     db.flush()

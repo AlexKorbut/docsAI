@@ -33,6 +33,25 @@ class Document(Base):
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document")
     entities: Mapped[list["Entity"]] = relationship(back_populates="document")
     payments: Mapped[list["Payment"]] = relationship(back_populates="document")
+    files: Mapped[list["DocumentFile"]] = relationship(
+        back_populates="document", order_by="DocumentFile.position"
+    )
+
+
+class DocumentFile(Base):
+    """Original uploaded files: photo pages of a paper document, or one e-file."""
+
+    __tablename__ = "document_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True)
+    position: Mapped[int] = mapped_column(default=0)  # page order for photos
+    filename: Mapped[str] = mapped_column(String(500))
+    stored_path: Mapped[str] = mapped_column(String(1000))
+    mime_type: Mapped[str | None] = mapped_column(String(200))
+    size_bytes: Mapped[int | None]
+
+    document: Mapped[Document] = relationship(back_populates="files")
 
 
 class Chunk(Base):

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { deleteDocument, documentFileUrl, getDocument, listDocuments } from '../api/client';
+import { deleteDocument, fileUrl, getDocument, listDocuments } from '../api/client';
 import type { DocumentDetail, DocumentInfo } from '../types';
 import { CATEGORY_LABELS } from '../types';
 import { Reminders } from './Reminders';
@@ -80,13 +80,27 @@ export function Library() {
             {selected.size_bytes ? ` · ${formatSize(selected.size_bytes)}` : ''}
           </p>
           <div className="doc-actions">
-            <a href={documentFileUrl(selected.id)} download>
-              Скачать оригинал
-            </a>
+            {selected.files.map((f) => (
+              <a key={f.id} href={fileUrl(selected.id, f.id)} download>
+                {selected.files.length > 1 ? `Стр. ${f.position + 1}` : 'Скачать оригинал'}
+              </a>
+            ))}
             <button className="danger" onClick={() => remove(selected.id)}>
               Удалить
             </button>
           </div>
+
+          {selected.files.some((f) => f.mime_type?.startsWith('image/')) && (
+            <div className="photo-strip">
+              {selected.files
+                .filter((f) => f.mime_type?.startsWith('image/'))
+                .map((f) => (
+                  <a key={f.id} href={fileUrl(selected.id, f.id)} target="_blank" rel="noreferrer">
+                    <img src={fileUrl(selected.id, f.id)} alt={f.filename} loading="lazy" />
+                  </a>
+                ))}
+            </div>
+          )}
 
           {selected.payments.length > 0 && (
             <>

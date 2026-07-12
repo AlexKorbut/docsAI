@@ -331,3 +331,44 @@ header p {
   color: #57606a;
   font-size: 0.85rem;
 }
+
+.upload-button.secondary {
+  background: white;
+  color: #1f6feb;
+  border: 1px solid #1f6feb;
+}
+
+.pending-photos {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #eef6ff;
+  border: 1px solid #b6d4fe;
+  border-radius: 10px;
+  font-size: 0.9rem;
+}
+
+.pending-photos button:not(.link-button) {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #1f6feb;
+  color: white;
+  cursor: pointer;
+}
+
+.photo-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  margin: 8px 0 12px;
+}
+
+.photo-strip img {
+  height: 180px;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+}

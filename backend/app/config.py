@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     verifier_model: str = "claude-opus-4-8"
     planner_model: str = "claude-sonnet-5"
     extraction_model: str = "claude-haiku-4-5"
+    # Photo transcription is the primary ingestion path — accuracy first.
+    vision_model: str = "claude-opus-4-8"
 
     # Embeddings / reranking
     voyage_api_key: str = ""

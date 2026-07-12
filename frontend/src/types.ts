@@ -20,6 +20,16 @@ export interface IngestResult {
   chunks: number;
   entities: number;
   payments: number;
+  pages: number;
+  warnings: string[];
+}
+
+export interface FileInfo {
+  id: number;
+  filename: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  position: number;
 }
 
 export interface ChatMessage {
@@ -55,6 +65,7 @@ export interface DocumentDetail extends DocumentInfo {
   markdown: string;
   entities: EntityInfo[];
   payments: PaymentInfo[];
+  files: FileInfo[];
 }
 
 export interface FamilyMember {

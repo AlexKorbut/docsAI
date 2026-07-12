@@ -12,6 +12,8 @@ class IngestResult(BaseModel):
     chunks: int
     entities: int
     payments: int
+    pages: int = 1
+    warnings: list[str] = []
 
 
 class DocumentInfo(BaseModel):
@@ -37,10 +39,19 @@ class PaymentInfo(BaseModel):
     description: str | None = None
 
 
+class FileInfo(BaseModel):
+    id: int
+    filename: str
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    position: int = 0
+
+
 class DocumentDetail(DocumentInfo):
     markdown: str
     entities: list[EntityInfo]
     payments: list[PaymentInfo]
+    files: list[FileInfo] = []
 
 
 class FamilyMemberIn(BaseModel):

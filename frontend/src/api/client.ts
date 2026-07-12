@@ -25,9 +25,12 @@ export async function askQuestion(question: string): Promise<Answer> {
   );
 }
 
-export async function uploadDocument(file: File, familyMember?: string): Promise<IngestResult> {
+export async function uploadDocument(
+  files: File[],
+  familyMember?: string,
+): Promise<IngestResult> {
   const form = new FormData();
-  form.append('file', file);
+  for (const file of files) form.append('files', file);
   const params = familyMember ? `?family_member=${encodeURIComponent(familyMember)}` : '';
   return json(await fetch(`/api/documents${params}`, { method: 'POST', body: form }));
 }
@@ -50,6 +53,10 @@ export async function getDocument(id: number): Promise<DocumentDetail> {
 
 export function documentFileUrl(id: number): string {
   return `/api/documents/${id}/file`;
+}
+
+export function fileUrl(documentId: number, fileId: number): string {
+  return `/api/documents/${documentId}/files/${fileId}`;
 }
 
 export async function deleteDocument(id: number): Promise<void> {
