@@ -44,4 +44,17 @@ def sync_document(document_id: int, title: str, category: str, entities: list[di
         logger.warning("Neo4j sync failed for document %s; continuing", document_id, exc_info=True)
 
 
+def delete_document(document_id: int) -> None:
+    """Remove a document node and its dangling entity mentions. Best-effort."""
+    try:
+        with get_driver().session() as session:
+            session.run(
+                "MATCH (d:Document {id: $id}) DETACH DELETE d",
+                id=document_id,
+            )
+            session.run("MATCH (n:Entity) WHERE NOT (n)--() DELETE n")
+    except Exception:
+        logger.warning("Neo4j delete failed for document %s", document_id, exc_info=True)
+
+
 # TODO: relationship queries (loan -> property -> payments traversals) for the Retriever agent.

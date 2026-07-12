@@ -31,6 +31,9 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://docsai:docsai@db:5432/docsai
       NEO4J_URI: bolt://neo4j:7687
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
     ports:
       - "8000:8000"
     depends_on:
@@ -57,3 +60,4 @@ services:
 volumes:
   pgdata:
   neo4jdata:
+  uploads:

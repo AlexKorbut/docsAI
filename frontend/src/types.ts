@@ -27,3 +27,59 @@ export interface ChatMessage {
   text: string;
   answer?: Answer;
 }
+
+export interface DocumentInfo {
+  id: number;
+  title: string;
+  category: string;
+  family_member: string | null;
+  source_filename: string | null;
+  size_bytes: number | null;
+  created_at: string;
+}
+
+export interface EntityInfo {
+  kind: string;
+  value: string;
+  normalized: string | null;
+}
+
+export interface PaymentInfo {
+  amount: number;
+  currency: string;
+  due_date: string | null;
+  description: string | null;
+}
+
+export interface DocumentDetail extends DocumentInfo {
+  markdown: string;
+  entities: EntityInfo[];
+  payments: PaymentInfo[];
+}
+
+export interface FamilyMember {
+  id: number;
+  name: string;
+  relation: string | null;
+  birth_date: string | null;
+  notes: string | null;
+}
+
+export interface Reminder {
+  document_id: number;
+  document_title: string;
+  category: string;
+  amount: number;
+  currency: string;
+  due_date: string;
+  description: string | null;
+  days_left: number;
+}
+
+export const CATEGORY_LABELS: Record<string, string> = {
+  loan: 'Кредит',
+  utilities: 'ЖКХ',
+  medical: 'Медицина',
+  property: 'Собственность',
+  other: 'Другое',
+};

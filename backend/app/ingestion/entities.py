@@ -14,7 +14,18 @@ EXTRACTION_SCHEMA = {
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["date", "amount", "person", "address", "contract_number"],
+                        "enum": [
+                            "date",
+                            "amount",
+                            "person",
+                            "address",
+                            "contract_number",
+                            "doctor",
+                            "diagnosis",
+                            "medication",
+                            "clinic",
+                            "appliance",
+                        ],
                     },
                     "value": {"type": "string"},
                     "normalized": {"type": ["string", "null"]},
@@ -43,10 +54,12 @@ EXTRACTION_SCHEMA = {
 }
 
 SYSTEM = """You extract structured facts from family documents (loans, utilities,
-medical, property), often in Russian. Extract entities exactly as written, with a
-normalized form where applicable (ISO dates, plain decimal amounts). Extract every
-payment obligation (amount + due date) into `payments`. Never invent values that
-are not present in the document."""
+medical records, property, household paperwork), often in Russian. Extract entities
+exactly as written, with a normalized form where applicable (ISO dates, plain decimal
+amounts). For medical documents also extract doctors, diagnoses, medications, and
+clinics; for household documents — appliances/devices (warranties, manuals). Extract
+every payment obligation (amount + due date) into `payments`. Never invent values
+that are not present in the document."""
 
 
 def extract(markdown: str, llm: LLMClient) -> tuple[list[ExtractedEntity], list[ExtractedPayment]]:

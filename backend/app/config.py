@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Optional integrations
     llamaparse_api_key: str = ""
 
+    # Original uploaded files are kept here (volume in docker-compose)
+    upload_dir: str = "data/uploads"
+
     # API
     cors_origins: str = "http://localhost:5173"
     min_confidence: int = 60

@@ -18,7 +18,51 @@ class DocumentInfo(BaseModel):
     id: int
     title: str
     category: str
+    family_member: str | None = None
+    source_filename: str | None = None
+    size_bytes: int | None = None
     created_at: datetime
+
+
+class EntityInfo(BaseModel):
+    kind: str
+    value: str
+    normalized: str | None = None
+
+
+class PaymentInfo(BaseModel):
+    amount: float
+    currency: str
+    due_date: date | None = None
+    description: str | None = None
+
+
+class DocumentDetail(DocumentInfo):
+    markdown: str
+    entities: list[EntityInfo]
+    payments: list[PaymentInfo]
+
+
+class FamilyMemberIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    relation: str | None = None
+    birth_date: date | None = None
+    notes: str | None = None
+
+
+class FamilyMemberOut(FamilyMemberIn):
+    id: int
+
+
+class Reminder(BaseModel):
+    document_id: int
+    document_title: str
+    category: str
+    amount: float
+    currency: str
+    due_date: date
+    description: str | None = None
+    days_left: int
 
 
 class QueryRequest(BaseModel):
